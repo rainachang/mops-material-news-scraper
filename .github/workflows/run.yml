@@ -8,6 +8,10 @@ on:
 permissions:
   contents: write             # 允許把 CSV commit 回 repo
 
+concurrency:
+  group: mops-scraper         # 同一時間只跑一個，其他排隊
+  cancel-in-progress: false
+
 jobs:
   run:
     runs-on: ubuntu-24.04
@@ -43,7 +47,13 @@ jobs:
           git add output/
           if git diff --cached --quiet; then
             echo "沒有新檔案需要 commit"
-          else
-            git commit -m "chore: add CSV $(date -u +%F_%H%M)"
-            git push
+            exit 0
           fi
+          git commit -m "chore: add CSV $(date -u +%F_%H%M)"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            echo "第 $i 次推送失敗，3 秒後重試"
+            sleep 3
+          done
+          echo "推送連續失敗 3 次"
+          exit 1
