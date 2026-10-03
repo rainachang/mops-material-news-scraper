@@ -13,6 +13,76 @@
 .lb{position:fixed;inset:0;background:rgba(255,255,255,.96);display:none;align-items:center;justify-content:center;z-index:20;cursor:zoom-out}
 .lb.on{display:flex}
 .lb img{max-width:92vw;max-height:92vh;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,.2)}
+/* 簡報容器：固定 16:9 比例與尺寸限制 */
+.slide {
+  width: 100%;
+  max-width: 1280px; /* 或你的簡報寬度 */
+  aspect-ratio: 16 / 9;
+  padding: 40px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 防止內容溢出 */
+}
+
+/* DEMO 區域：左右雙欄平分 */
+.demo {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* 左右各佔 50% */
+  gap: 20px;
+  flex: 1; /* 填滿標題下方的剩餘垂直空間 */
+  min-height: 0; /* 關鍵：防止內部元素撐開 */
+}
+
+/* 左側影片區塊 */
+.vid {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 0;
+}
+
+.vid video {
+  width: 100%;
+  max-height: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: contain; /* 確保影片不變形、完整顯示 */
+  border-radius: 8px;
+  background-color: #000; /* 影片兩側留白時補黑背景 */
+}
+
+/* 右側圖片區塊：上下排列兩張圖 */
+.shots {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.shot {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  min-height: 0;
+}
+
+.shot img {
+  width: 100%;
+  flex: 1;
+  object-fit: contain; /* 防止圖片被拉伸，完整縮放 */
+  min-height: 0;
+  border-radius: 6px;
+}
+
+.shot figcaption {
+  font-size: 14px;
+  text-align: center;
+  margin-top: 6px;
+  color: #666;
+}
 :root{--ac:#1d4ed8;--tx:#111827;--mu:#6b7280;--bd:#e5e7eb;--soft:#f3f6ff;--bad:#dc2626;--ok:#059669}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#fff;color:var(--tx);overflow:hidden;font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
