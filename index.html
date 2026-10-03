@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>MOPS 重大訊息爬蟲</title>
 <style>
+.demo{flex:1;display:grid;grid-template-columns:1.5fr 1fr;grid-template-rows:minmax(0,1fr);gap:28px;min-height:0}
+.shots{display:flex;flex-direction:column;gap:16px;min-height:0}
+.shot{flex:1;min-height:0;display:flex;flex-direction:column;margin:0}
+.shot img{flex:1;min-height:0;width:100%;object-fit:contain;background:#f9fafb;border-radius:12px;border:1px solid var(--bd);cursor:zoom-in}
+.shot figcaption{font-size:16px;color:var(--mu);margin-top:6px}
+.lb{position:fixed;inset:0;background:rgba(255,255,255,.96);display:none;align-items:center;justify-content:center;z-index:20;cursor:zoom-out}
+.lb.on{display:flex}
+.lb img{max-width:92vw;max-height:92vh;border-radius:12px;box-shadow:0 8px 40px rgba(0,0,0,.2)}
 :root{--ac:#1d4ed8;--tx:#111827;--mu:#6b7280;--bd:#e5e7eb;--soft:#f3f6ff;--bad:#dc2626;--ok:#059669}
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#fff;color:var(--tx);overflow:hidden;font-family:"PingFang TC","Noto Sans TC","Microsoft JhengHei",system-ui,sans-serif}
@@ -169,6 +177,22 @@ RUN_FOREVER=0 python mops_scraper.py</pre>
 <tr><td>API 全部連不上</td><td>不輸出，log 顯示錯誤</td></tr>
 <tr><td>找不到清單</td><td>直接停止，避免抓到不相關公司</td></tr>
 </table></div>
+</div>
+</section>
+
+<section class="slide">
+<div class="kicker">DEMO</div>
+<h2>操作示範</h2>
+<div class="demo">
+  <div class="vid">
+    <video src="demo_video.mp4" controls preload="metadata" playsinline></video>
+  </div>
+  <div class="shots">
+    <figure class="shot">
+      <img src="demo_cvsjpg" alt="產生的csv">
+      <figcaption>csv檔案內的內容</figcaption>
+    </figure>
+  </div>
 </div>
 </section>
 
