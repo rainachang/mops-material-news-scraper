@@ -8,9 +8,13 @@ on:
 permissions:
   contents: write             # 允許把 CSV commit 回 repo
 
+concurrency:
+  group: mops-scraper         # 同一時間只跑一個，其他排隊
+  cancel-in-progress: false
+
 jobs:
   run:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -22,11 +26,12 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run scraper
-        run: python mops_scraper.py
+        run: |
+          mkdir -p output
+          python mops_scraper.py
         env:
           RUN_FOREVER: "0"
           OUTPUT_DIR: output
-          WATCHLIST_FILE: watchlist.example.txt
 
       - name: Upload CSV as artifact
         uses: actions/upload-artifact@v4
@@ -40,5 +45,15 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add output/
-          git diff --cached --quiet || git commit -m "chore: add CSV $(date -u +%F_%H%M)"
-          git push
+          if git diff --cached --quiet; then
+            echo "沒有新檔案需要 commit"
+            exit 0
+          fi
+          git commit -m "chore: add CSV $(date -u +%F_%H%M)"
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            echo "第 $i 次推送失敗，3 秒後重試"
+            sleep 3
+          done
+          echo "推送連續失敗 3 次"
+          exit 1
