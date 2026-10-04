@@ -1,8 +1,9 @@
 """
 MOPS 重大訊息爬蟲（本機常駐展示 / GitHub Actions 共用）
-流程：抓取 -> 篩公司 -> 篩關鍵字 -> 每次輸出新的 CSV（檔名帶日期時間）
+流程：抓取今日資料 -> 併入歷史檔 -> 取最近 N 天 -> 篩公司 -> 篩關鍵字 -> 輸出新的 CSV
 需求：pip install requests pandas schedule
 """
+import hashlib
 import logging
 import os
 import re
@@ -13,6 +14,12 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+
+try:
+    from zoneinfo import ZoneInfo
+    TW = ZoneInfo("Asia/Taipei")
+except Exception:  # 沒有時區資料時退回系統時間
+    TW = None
 
 # ========================= 使用者設定區 =========================
 # 程式所在的資料夾（不需要手動寫資料夾名稱）
@@ -26,6 +33,13 @@ WATCHLIST_FILE = Path(os.getenv("WATCHLIST_FILE", BASE_DIR / "watchlist.txt"))
 
 # 輸出檔名前綴，實際檔名：mops_scraper_20261003_183000.csv
 FILE_PREFIX = "mops_scraper"
+
+# 每次輸出「執行當下往前推 N 天」的內容（預設 7 天）
+LOOKBACK_DAYS = int(os.getenv("LOOKBACK_DAYS", "7"))
+
+# 歷史檔：每次執行都會把當天抓到的原始資料累積進來，才能湊出一週的內容
+HISTORY_FILE = OUTPUT_DIR / "mops_history.csv"
+HISTORY_KEEP_DAYS = 60  # 歷史檔只保留最近幾天，避免檔案無限變大
 
 # 關鍵字：「主旨」或「說明」任一欄含有其中一個詞就保留
 KEYWORDS = ["人員變動"]
@@ -41,6 +55,7 @@ RUN_FOREVER = os.getenv("RUN_FOREVER", "1") == "1"
 DAILY_RUN_TIME = "18:00"
 # ================================================================
 
+KEY = "_key"
 OUTPUT_COLUMNS = [
     "市場別", "公司代號", "公司名稱", "發言日期", "發言日期(西元)",
     "發言時間", "主旨", "符合條款", "事實發生日", "說明", "抓取時間",
@@ -54,14 +69,27 @@ logging.basicConfig(
 )
 
 
+def now_tw() -> datetime:
+    """台灣時間（GitHub 的機器是 UTC，這樣日期才不會差一天）。"""
+    return datetime.now(TW) if TW else datetime.now()
+
+
 def load_watchlist() -> list[str]:
-    """讀取 watchlist.txt，支援換行／空白／逗號分隔，並去除重複。"""
+    """讀取 watchlist.txt；找不到或是空的就停止，避免抓到不相關的公司。"""
     if not WATCHLIST_FILE.exists():
-        logging.warning("找不到 %s，將不篩公司（抓全部）。", WATCHLIST_FILE)
-        return []
+        if os.getenv("ALLOW_NO_WATCHLIST") == "1":
+            logging.warning("找不到追蹤清單，依設定改為不篩公司（抓全部）。")
+            return []
+        logging.error("找不到追蹤清單：%s。為避免抓到不相關的公司，程式停止。", WATCHLIST_FILE)
+        sys.exit(1)
+
     text = WATCHLIST_FILE.read_text(encoding="utf-8-sig")
     codes = re.findall(r"\d{4,6}", text)
     unique = list(dict.fromkeys(codes))
+    if not unique:
+        logging.error("追蹤清單裡沒有任何股票代號：%s，程式停止。", WATCHLIST_FILE)
+        sys.exit(1)
+
     logging.info("已載入追蹤公司 %d 檔（去重後）：%s", len(unique), WATCHLIST_FILE)
     return unique
 
@@ -103,42 +131,87 @@ def load_market(name: str, url: str) -> pd.DataFrame:
     return df
 
 
+def prepare(df: pd.DataFrame) -> pd.DataFrame:
+    """補上西元日期、抓取時間與唯一鍵（公司＋發言日期＋發言時間＋主旨）。"""
+    df = df.copy()
+    for col in ["公司代號", "發言日期", "發言時間", "主旨", "說明"]:
+        if col not in df.columns:
+            df[col] = ""
+    df = df.fillna("").astype(str)
+    df["公司代號"] = df["公司代號"].str.strip()
+    df["發言日期(西元)"] = df["發言日期"].map(roc_to_iso)
+    df["抓取時間"] = now_tw().strftime("%Y-%m-%d %H:%M:%S")
+    raw = df["公司代號"] + df["發言日期"] + df["發言時間"] + df["主旨"]
+    df[KEY] = raw.map(lambda x: hashlib.md5(x.encode("utf-8")).hexdigest())
+    return df
+
+
+def load_history() -> pd.DataFrame:
+    if not HISTORY_FILE.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(HISTORY_FILE, dtype=str, encoding="utf-8-sig").fillna("")
+    except Exception as e:
+        logging.error("讀取歷史檔失敗：%s（將重新建立）", e)
+        return pd.DataFrame()
+
+
+def update_history(today_df: pd.DataFrame) -> pd.DataFrame:
+    """把今天抓到的資料併入歷史檔（去重），並清掉太舊的資料，回傳合併後的全部歷史。"""
+    merged = pd.concat([load_history(), today_df], ignore_index=True).fillna("")
+    before = len(merged)
+    merged = merged.drop_duplicates(subset=KEY, keep="first")
+
+    dt = pd.to_datetime(merged["發言日期(西元)"], errors="coerce")
+    cutoff = pd.Timestamp(now_tw().date()) - pd.Timedelta(days=HISTORY_KEEP_DAYS)
+    merged = merged[dt.isna() | (dt >= cutoff)]
+
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    merged.to_csv(HISTORY_FILE, index=False, encoding="utf-8-sig")
+    logging.info("歷史檔已更新：%s（共 %d 筆，本次去除重複 %d 筆）",
+                 HISTORY_FILE.name, len(merged), before - len(merged))
+    return merged
+
+
+def select_window(df: pd.DataFrame) -> pd.DataFrame:
+    """只留下「執行當下往前推 LOOKBACK_DAYS 天」的資料。"""
+    dt = pd.to_datetime(df["發言日期(西元)"], errors="coerce")
+    start = pd.Timestamp(now_tw().date()) - pd.Timedelta(days=LOOKBACK_DAYS)
+
+    earliest = dt.min()
+    if pd.notna(earliest) and earliest > start:
+        logging.warning(
+            "歷史資料目前最早只到 %s，尚未涵蓋完整 %d 天（%s 起）。"
+            "每天持續執行，就會逐日補齊。",
+            earliest.date(), LOOKBACK_DAYS, start.date())
+    logging.info("輸出範圍：%s ～ %s（往前推 %d 天）",
+                 start.date(), now_tw().date(), LOOKBACK_DAYS)
+    return df[dt >= start]
+
+
 def filter_df(df: pd.DataFrame, watchlist: list[str]) -> pd.DataFrame:
     if df.empty:
         return df
-    df = df.copy()
-    for col in ["公司代號", "主旨", "說明"]:
-        if col not in df.columns:
-            df[col] = ""
-    df["公司代號"] = df["公司代號"].astype(str).str.strip()
-
     if watchlist:
         df = df[df["公司代號"].isin(watchlist)]
-
     pattern = "|".join(KEYWORDS)
     text = df["主旨"].fillna("") + " " + df["說明"].fillna("")
     return df[text.str.contains(pattern, na=False)]
 
 
-def add_dates(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    for col in ["發言日期", "發言時間"]:
-        if col not in df.columns:
-            df[col] = ""
-    df["發言日期(西元)"] = df["發言日期"].map(roc_to_iso)
-    df["抓取時間"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return df.sort_values(["發言日期(西元)", "發言時間"], ascending=False)
-
-
 def save_new_file(df: pd.DataFrame) -> None:
     """每次執行都寫一個新檔，檔名帶日期時間，不覆蓋舊檔。"""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = now_tw().strftime("%Y%m%d_%H%M%S")
     path = OUTPUT_DIR / f"{FILE_PREFIX}_{stamp}.csv"
     if df.empty:
         df = pd.DataFrame(columns=OUTPUT_COLUMNS)
+    else:
+        extra = [c for c in df.columns if c not in OUTPUT_COLUMNS and c != KEY]
+        df = df.sort_values(["發言日期(西元)", "發言時間"], ascending=False)
+        df = df[[c for c in OUTPUT_COLUMNS if c in df.columns] + extra]
     df.to_csv(path, index=False, encoding="utf-8-sig")
-    logging.info("已輸出新檔案：%s（%d 筆）", path, len(df))  # 顯示完整路徑，方便確認位置
+    logging.info("已輸出新檔案：%s（%d 筆）", path, len(df))
 
 
 def run_once() -> None:
@@ -158,10 +231,15 @@ def run_once() -> None:
         logging.error("所有來源都沒有資料，本次不輸出檔案。")
         return
 
-    df = filter_df(pd.concat(frames, ignore_index=True), watchlist)
-    logging.info("篩選後符合條件：%d 筆", len(df))
+    today_df = prepare(pd.concat(frames, ignore_index=True))
+    history = update_history(today_df)
 
-    save_new_file(add_dates(df) if not df.empty else df)
+    window = select_window(history)
+    result = filter_df(window, watchlist)
+    logging.info("近 %d 天資料 %d 筆，篩選後符合條件：%d 筆",
+                 LOOKBACK_DAYS, len(window), len(result))
+
+    save_new_file(result)
     logging.info("===== 完成 =====")
 
 
